@@ -1,0 +1,77 @@
+FROM ubuntu:latest
+RUN apt-get update
+
+# install dependencies
+RUN apt-get install --yes gcc g++ bison texinfo make wget xz-utils perl
+
+# Compile binutils
+RUN mkdir /build && cd /build && \
+  wget https://ftp.gnu.org/gnu/binutils/binutils-2.39.tar.xz && \
+  tar -xf binutils-2.39.tar.xz && cd binutils-2.39 && \
+  ./configure --enable-libssp --enable-ld \
+      --target=x86_64-pc-freebsd13 --prefix=/opt/cross-freebsd && make -j8 && \
+  make install && \
+  rm -rf /build && mkdir /build
+
+# Get FreeBSD libs/headers, extract and fix broken links
+RUN cd /build/ && \
+  wget http://ftp-archive.freebsd.org/pub/FreeBSD-Archive/old-releases/amd64/13.0-RELEASE/base.txz && \
+  cd /opt/cross-freebsd/x86_64-pc-freebsd13 && \
+  tar -xf /build/base.txz ./lib/ ./usr/lib/ ./usr/include/ && \
+  cd /opt/cross-freebsd/x86_64-pc-freebsd13/usr/lib && \
+  find . -xtype l|xargs ls -l|grep ' /lib/' \
+    | awk '{print "ln -sf /opt/cross-freebsd/x86_64-pc-freebsd13"$11 " " $9}' \
+    | /bin/sh && \
+  rm -rf /build && mkdir /build
+
+# Compile GMP
+RUN cd /build && \
+  wget https://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz && \
+  tar -xf gmp-6.2.1.tar.xz && \
+  cd gmp-6.2.1 && \
+  ./configure --prefix=/opt/cross-freebsd --enable-static --enable-shared \
+      --enable-fft --enable-cxx --host=x86_64-pc-freebsd13 && \
+  make -j8 && make install && \
+  rm -rf /build && mkdir /build
+
+# Compile MPFR
+RUN cd /build && \
+  wget https://ftp.gnu.org/gnu/mpfr/mpfr-4.1.0.tar.xz && tar -xf mpfr-4.1.0.tar.xz && \
+  cd mpfr-4.1.0 && \
+  ./configure --prefix=/opt/cross-freebsd --with-gnu-ld --enable-static --enable-shared \
+      --with-gmp=/opt/cross-freebsd --host=x86_64-pc-freebsd13 && \
+  make -j8 && make install && \
+  rm -rf /build && mkdir /build
+
+# Compile MPC
+RUN cd /build && \
+  wget https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz  && tar -xf mpc-1.2.1.tar.gz && \
+  cd mpc-1.2.1 && \
+  ./configure --prefix=/opt/cross-freebsd --with-gnu-ld --enable-static --enable-shared --with-gmp=/opt/cross-freebsd --with-mpfr=/opt/cross-freebsd --host=x86_64-pc-freebsd13 && \
+  make -j8 && make install && \
+  rm -rf /build && mkdir /build
+
+# 1. Configure GCC
+# 2. Fix GCC for the failed aligned_alloc detection
+# 3. Build and install
+RUN cd /build && \
+  wget https://ftp.gnu.org/gnu/gcc/gcc-12.2.0/gcc-12.2.0.tar.xz && \
+  tar xf gcc-12.2.0.tar.xz && \
+  cd gcc-12.2.0 && mkdir build && cd build && \
+  ../configure --disable-multilib --without-headers --with-gnu-as --with-gnu-ld --disable-nls \
+      --enable-languages=c,c++ --enable-libssp --enable-ld \
+      --disable-libitm --disable-libquadmath --target=x86_64-pc-freebsd13 \
+      --prefix=/opt/cross-freebsd --with-gmp=/opt/cross-freebsd \
+      --with-mpc=/opt/cross-freebsd --with-mpfr=/opt/cross-freebsd --disable-libgomp \
+      --with-sysroot=/opt/cross-freebsd/x86_64-pc-freebsd13 \
+      --with-build-sysroot=/opt/cross-freebsd/x86_64-pc-freebsd13 && \
+  cd /build/gcc-12.2.0 && \
+  echo '#define HAVE_ALIGNED_ALLOC 1' >> libstdc++-v3/config.h.in && \
+  cd /build/gcc-12.2.0/build && \
+  make -j8 && make install && \
+  rm -rf /build
+  
+  ## Configure run
+  ## ./configure CC=/opt/cross-freebsd/bin/x86_64-pc-freebsd13-gcc CXX=/opt/cross-freebsd/bin/x86_64-pc-freebsd13-g++ \
+  ## --host=x86_64-pc-freebsd13 LDFLAGS="-nodefaultlibs -lc++ -lm -lc -lgcc_s -lgcc" \
+  ## CXXFLAGS="-std=c++11 -I/opt/cross-freebsd/x86_64-pc-freebsd13/usr/include/c++/v1 -nostdinc++"
